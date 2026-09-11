@@ -1,0 +1,85 @@
+name: CI Pipeline
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [20, 22]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+
+      - name: Check package manifest
+        id: manifest
+        shell: bash
+        run: |
+          if [[ -f package.json ]]; then
+            echo present=true
+          else
+            echo present=false
+          fi
+
+      - name: Install dependencies
+        if: steps.manifest.outputs.present == 'true'
+        run: npm install
+
+      - name: Check source files
+        id: sources
+        shell: bash
+        run: |
+          if find src test tests -type f \( -name '*.ts' -o -name '*.tsx' \) -print -quit 2>/dev/null | grep -q .; then
+            echo present=true
+          else
+            echo present=false
+          fi
+
+      - name: Lint
+        if: steps.manifest.outputs.present == 'true' && steps.sources.outputs.present == 'true'
+        run: npx eslint .
+
+      - name: Build or type check
+        if: steps.manifest.outputs.present == 'true' && steps.sources.outputs.present == 'true'
+        run: npx tsc --noEmit
+
+      - name: Check test files
+        id: tests
+        shell: bash
+        run: |
+          if find test tests -type f \( -name '*.ts' -o -name '*.tsx' \) -print -quit 2>/dev/null | grep -q .; then
+            echo present=true
+          else
+            echo present=false
+          fi
+
+      - name: Test
+        if: steps.manifest.outputs.present == 'true' && steps.sources.outputs.present == 'true' && steps.tests.outputs.present == 'true'
+        run: npx vitest run
+
+      - name: Summary
+        if: always()
+        shell: bash
+        run: |
+          status=success
+          if [[ '${{ job.status }}' != 'success' ]]; then
+            status=failed
+          fi
+          echo "TypeScript CI (${{ matrix.node-version }}): $status" >> "$GITHUB_STEP_SUMMARY"
